@@ -1,0 +1,288 @@
+---
+title: "Kaggle Competition - Titanic"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+# Setting working directory and loading the libraries
+
+```{r warning=FALSE, include=TRUE}
+setwd("C:\\Users\\Guilherme\\Documents\\Data Science\\Kaggle\\Titanic")
+library(ggplot2)
+library(data.table)
+library(magrittr)
+```
+
+# Loading the training and test datasets
+The training dataset has 891 observations and 13 variables and the test dataset has 418 observations and 12 variables - the difference is due to the `Survived` variable in the former.
+These dataset were appended into a the new dataset `fullDT0` in order to facilitate the variable transformations such as transforming char type variable to a factor one. Hence, this dataset has 1309 observation and 13 variables.
+```{r echo=TRUE}
+b.test0 <- data.table(read.csv("test.csv", na.strings = c("")))[, Origin := "test"]
+b.train0 <- data.table(read.csv("train.csv", na.strings = c("")))[, Origin := "train"]
+fullDT0 <- rbind(b.test0, b.train0, fill = TRUE, use.names = TRUE)
+lapply(list(b.train0, b.test0, fullDT0), dim)
+```
+
+# Checking the variables type and choosing the a new one properly.
+The variables `PClass`, `Name` and `Ticket` are st as integer, factor and factor, respectively. `PClass` is changed to *factor* because it has an ordinal meaning, while `Name` and `Ticket` are transformed from *factor* to *character* they are similar to a passenger identificator .
+It could be possible to exist more than one passenger with the same name and the same ticket identification, however the number of factor levels they have suggests the variables themself would not be a source of significant information for the model.
+```{r}
+str(fullDT0)
+```
+
+```{r include = FALSE}
+fullDT0$Pclass <- factor(b.treino$Pclass, levels = c(3, 2, 1))
+fullDT0$Name <- as.character(b.treino$Name)
+fullDT0$Ticket <- as.character(b.treino$Ticket)
+fullDT0$Survived <- as.factor(b.treino$Survived)
+b.teste$Pclass <- factor(b.teste$Pclass, levels = c(3, 2, 1))
+b.teste$Name <- as.character(b.teste$Name)
+b.teste$Ticket <- as.character(b.teste$Ticket)
+b.total <- as.data.table(rbind(b.treino, b.teste, fill = TRUE, use.names = TRUE))
+row.names(b.total) <- NULL
+```
+## Criando novas variáveis que podem ser úteis na hora de estimar o modelo
+###Tamanho da família
+```{r}
+b.total[, N.Familia := SibSp + Parch + 1]
+summary(b.total$N.Familia)
+```
+###Pai ou mãe
+
+###Títulos
+Apesar de o título de Dr. ser utilizado em homens, há uma mulher com esse titulo: Leader, Dr. Alice (Farnham)
+Mr. homem, casado ou não ;; Miss. mulher solteira; Master. homens; Don. homem; Rev. Homem; Dr.homem, menos Leader, Dr. Alice (Farnham); Mme. mulher, casada ou não; Ms. mulher, casada ou não; Major.homem; Lady. mulher, casada ou não; Sir. homem, casado ou não; Mlle. mulher, geralmente casada (conferir); Col. homem; Capt. homem; Countess. Mulher; Jonkheer. homem; Donna. mulher
+```{r include=FALSE}
+library(stringr)
+titulos <- unique(str_extract(b.total$Name, "[A-Za-z]+\\."))
+b.total[, Titulo := str_extract(Name, "[A-Za-z]+\\.")]
+table(b.total$Titulo)
+b.total[which(b.total$Titulo %in% names(which(table(b.total$Titulo) <61))), Titulo := "Raro"]
+b.total$Titulo <- as.factor(b.total$Titulo)
+```
+##ANÁLISE DAS VARIÁVEIS EXPLICATIVAS
+### Obtendo um panorama geral das variáveis
+Pelo summary, pode-se ver que há NA's nas variáveis Age, Fare, Cabin e Embarked  - que precisam ser tratadas. Como há muito missing na variável Cabin, ela não deve ser utilizada.
+```{r echo=TRUE}
+summary(b.total)
+b.total <- b.total[, Cabin := NULL]
+```
+### Variável `Survived`
+```{r eval=FALSE, include=FALSE}
+summary(b.total$Survived)
+ggplot(b.total[!is.na(b.total$Survived), ], aes(x = Survived, fill = Survived)) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = ..count..))
+```
+### Variável `Pclass`
+```{r}
+ggplot(data = b.total[!is.na(b.total$Survived)], aes(x = Pclass, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+prop.table(table(b.total$Sex, b.total$Survived), 2)
+```
+### Variável `Sex`
+```{r}
+ggplot(data = b.total[!is.na(b.total$Survived)], aes(x = Sex, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+prop.table(table(b.total$Sex, b.total$Survived), 2)
+```
+### Variável `SibSp`
+```{r}
+ggplot(data = b.total[!is.na(b.total$Survived)], aes(x = SibSp, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+prop.table(table(b.total$SibSp, b.total$Survived), 2)
+```
+### Variável `Parch`
+```{r}
+ggplot(data = b.total[!is.na(b.total$Survived)], aes(x = Parch, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+prop.table(table(b.total$Parch, b.total$Survived), 2)
+```
+### Variável `Fare`
+```{r}
+ggplot(data = b.total[!is.na(b.total$Survived)], aes(x = Sex, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+prop.table(table(b.total$Sex, b.total$Survived), 2)
+```
+#### Missing na variável `Fare`
+Ao listar as observações que apresentam missing na variável "Fare", pode-se notar que apenas uma é listada.
+```{r warning=TRUE, include=TRUE}
+library(knitr)
+b.total[which(is.na(b.total$Fare)),]
+```
+
+A partir de então, parte-se para a busca de padrões ou relações que permitam imputar o seu valor de "Ticket". Primeiro, procurou-se pessoas com o mesmo sobrenome da pessoa referente à observação analisada; o que se mostrou inexistente. Posteriormente, buscou-se pessoas com o mesmo número, o que não foi encontrado. Dentro da ideia de que as pessoas com a mesma origem (`Embarked`) e mesma classe `Pclass` devem apresentar atributos semelhantes, buscou-se, por último, aquelas observações que também apresentam a numeração do *ticket* com 4 algarismos - a ideia por trás disso é que pode haver uma relação entre as demais variáveis e os tickets com numeração próxima - e que estejam na terceira classe.
+```{r include=TRUE}
+b.total[which(grepl("^Storey", b.total$Name)), ]
+b.total[which(grepl("3701", b.total$Ticket)), ]
+b.total[which(nchar(b.total$Ticket) == 4 &  b.total$Embarked == "S" & b.total$Pclass == 3), ][order(Ticket)]
+```
+A partir da tabela, pode-se perceber que os *tickets* com maior valor são aqueles que possuem numeração repetida. Sendo assim, utilizou-se a média dos valores entre os tickets que não apresentassem valores repetidos como a opção para subtituir o `NA` da observação em análise. O valor médio é de 10.85302.
+```{r include=FALSE}
+b.total[which(is.na(b.total$Fare)), "Fare"] <- b.total[which(nchar(b.total$Ticket) == 4 &  b.total$Embarked == "S" & b.total$Pclass == 3), ][ !duplicated(Ticket), mean(Fare, na.rm = TRUE)]
+```
+### Variável `Embarked`
+#### Missing na variável `Embarked`
+Ao listar as observações que apresentam missing, observa-se que são apenas duas.
+```{r include=TRUE}
+b.total[which(is.na(b.total$Embarked)),]
+```
+Seguindo a mesma lógica da variável anterior, pode-se notar que não há outros passageiros com os mesmos sobrenomes das duas observações em análise. Parte-se, então, para a comparação com as observações que também pertencem à primeira classe (`Pclass == 1`) e possuem o começo do *ticket* como *113*. Pelo gráfico Box-plot, pode-se ver que o o valor da passagem igual a 80 (`Fare == 80`), linha vermelha no gráfico, seria um outlier `Embarked == S`. Logo, imputa-se o valor *C* para as observações em análise..
+```{r include=TRUE}
+b.total[which(grepl("^Icard", b.total$Name)), ]
+b.total[which(grepl("^Stone", b.total$Name)), ]
+b.total[which(grepl("^113", b.total$Ticket)), ][order(Ticket)]
+ggplot(b.total[which(grepl("^113", b.total$Ticket) & b.total$Pclass == 1 & !is.na(b.total$Embarked)) , ], aes(x = Embarked, y = Fare))  + geom_boxplot() + geom_hline(yintercept = 80, color = "Red")
+b.total[which(is.na(b.total$Embarked)), "Embarked"] <- "C"
+```
+### Variável `Age`
+```{r include=FALSE}
+summary(b.total$Age)
+ggplot(b.total, aes(x = Pclass, y = Age), na.rm = TRUE) + geom_boxplot()
+ggplot(b.total, aes(x = Age)) + geom_density() + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE)), color = "red", linetype = "dashed") + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE) + 2*sd(Age, na.rm = TRUE)), color = "blue") + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE) - 2*sd(Age, na.rm = TRUE)), color = "blue")
+```
+#### Lidando com outliers na variável `Age`
+```{r}
+ggplot(data = b.total, mapping = aes(x = Age, y = Titulo, shape = Titulo, color = Titulo)) + geom_point()
+outliergeral <-  boxplot.stats(b.total$Age)$out
+outlierP1 <- boxplot.stats(b.total$Age[b.total$Pclass == 1])$out
+outlierP2 <- boxplot.stats(b.total$Age[b.total$Pclass == 2])$out
+outlierP3 <- boxplot.stats(b.total$Age[b.total$Pclass == 3])$out
+b.total[, OutlierAge := ifelse(Age %in% outliergeral, 1, 0)]
+```
+#### Previsão dos missings em `Age`
+```{r}
+library(broom)
+library(caret)
+set.seed(42)
+ageFull <- b.total[!is.na(b.total$Age), -"Survived"]
+age.trainIndex <- createDataPartition(ageFull$Age, p = .75, list = FALSE, times = 1)
+ageTrain <-ageFull[age.trainIndex]
+ageTest <- ageFull[-age.trainIndex]
+set.seed(3500)
+# Regressão MQO com intercepto
+ols.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Titulo + OutlierAge, data = ageTrain, 
+                 trControl = trainControl(method = "cv"), verboseIter = TRUE, method = "lm", tuneGrid = expand.grid(intercept = TRUE))
+ageTest[, pAge.ols := predict(ols.Age, newdata = ageTest, type = "raw")]
+postResample(pred = ageTest$pAge.ols, obs = ageTest$Age)
+# Regressão MQO sem intercepto
+ols0.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Titulo + OutlierAge, data = ageTrain, 
+                 trControl = trainControl(method = "cv"), verboseIter = TRUE, method = "lm", tuneGrid = expand.grid(intercept = FALSE))
+ageTest[, pAge.ols0 := predict(ols0.Age, newdata = ageTest, type = "raw")]
+postResample(pred = ageTest$pAge.ols0, obs = ageTest$Age)
+#Regressão Linear Stepwise
+step.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Titulo + OutlierAge, data = ageTrain, method = "glmStepAIC",
+                  trControl = trainControl(method = "cv"))
+ageTest[, pAge.step := predict(step.Age, newdata = ageTest, type = "raw")]
+postResample(pred = ageTest$pAge.step, obs = ageTest$Age)
+#Regressão NNLSS
+nnlss.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Titulo + OutlierAge, data = ageTrain, 
+                   trControl = trainControl(method = "cv"), verboseIter = TRUE, method = "nnls")
+ageTest[, pAge.nnlss := predict(nnlss.Age, newdata = ageTest, type = "raw")]
+postResample(pred = ageTest$pAge.nnlss, obs = ageTest$Age)
+
+b.total[, Age.step := ifelse(is.na(b.total$Age), predict(step.Age, newdata = b.total, type = "raw"), Age)]
+
+par(mfrow = c(1, 3))
+hist(b.total$Age[!is.na(b.total$Age)])
+hist(b.total$Age.ols[is.na(b.total$Age)])
+hist(b.total$Age.step[is.na(b.total$Age)])
+
+```
+# Modelagem
+```{r include=FALSE}
+set.seed(875614)
+b.treino <- b.total[b.total$Origem == "treino"]
+b.totalTrainIndex <- createDataPartition(b.treino$Survived, p = 0.75, list = FALSE, times = 1)
+b.totalTrain <- b.treino[b.totalTrainIndex]
+b.totalTest <- b.treino[-b.totalTrainIndex]
+
+logit <- train(Survived ~ Pclass + Sex + Age.step + SibSp + Parch + N.Familia + Fare + Embarked + Titulo, 
+               data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, Survived1 := predict(logit1, newdata = b.totalTest, type = "raw")]
+modelsSummary <- list(logit = postResample(pred = b.totalTest$Survived1, obs = b.totalTest$Survived))
+confusionMatrix(data = b.totalTest$Survived1, reference = b.totalTest$Survived)
+varImp(logit1)
+
+logitOutlier <- train(Survived ~ Pclass + Sex + Age.step + Age.step*OutlierAge + SibSp + Parch + N.Familia + Fare + Embarked + Titulo, 
+                      data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, Survived2 := predict(logitOutlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$logitOutlier <- postResample(pred = b.totalTest$Survived2, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$Survived2, reference = b.totalTest$Survived)
+varImp(logitOutlier)
+
+logitstep <- step(glm(Survived ~ 1, data = b.totalTrain, family = "binomial"), 
+                  scope = list(
+                    lower = glm(Survived ~ 1, data = b.totalTrain, family = "binomial"), 
+                    upper = glm(Survived ~ Pclass + Sex + Age.step + I(Age.step^2) + Age.step*OutlierAge + SibSp + Parch + N.Familia + 
+                                  Fare + Embarked + Titulo + Pclass*Sex + Pclass*Sex*Age.step + Sex*Age.step + Sex*N.Familia + 
+                                  Age*N.Familia + Sex*Age*N.Familia, data = b.totalTrain, family = "binomial")), direction = "forward")
+b.totalTest[, SruvivedStep := ifelse(predict(logitstep, newdata = b.totalTest, type = "response") > 0.5, 1, 0)]
+modelsSummary$logitStep <- postResample(pred = b.totalTest$SruvivedStep, obs = b.totalTest$Survived)
+
+logitbest <- train(Survived ~ Pclass + Sex + Age.step + I(Age.step^2) + OutlierAge + SibSp + Parch + N.Familia + Fare +
+                                  Embarked + Titulo + Pclass*Sex + Pclass*Sex*Age.step + Sex*Age.step + Sex*N.Familia, 
+                   data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, SurvivedLbest := predict(logitbest, newdata = b.totalTest, type = "raw")]
+modelsSummary$logitbest <- postResample(pred = b.totalTest$SurvivedLbest, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$SurvivedLbest, reference = b.totalTest$Survived)
+varImp(logitbest)
+
+logitbest2 <- train(Survived ~ Pclass*Sex*Age.step + Sex + Age.step + I(Age.step^2) + OutlierAge + SibSp + Parch + Age.step*N.Familia + Fare + Embarked + Titulo, data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, SurvivedLbest2 := predict(logitbest2, newdata = b.totalTest, type = "raw")]
+modelsSummary$logitbest2 <- postResample(pred = b.totalTest$SurvivedLbest2, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$SurvivedLbest2, reference = b.totalTest$Survived)
+varImp(logitbest2)
+#summary(logit3)
+#anova(logit3, test = "Chisq")
+#previsao3 <- predict(logit3, newdata = b.total[b.total$Origem == "treino"], type = "response")
+#previsao3 <- ifelse(previsao3 >0.5, 1, 0)
+#erro.previsao3 <- mean(previsao3 != b.total[b.total$Origem == "treino", "Survived"])
+#print(paste("Acurácia", 1 - erro.previsao3))
+svm <- train(Survived ~ Pclass + Sex + Age.step + SibSp + Parch + N.Familia + Fare + Embarked + Titulo, data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "cv"), tuneLength = 10) 
+b.totalTest[, SurvivedSVM := predict(svm, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm <- postResample(pred = b.totalTest$SurvivedSVM, obs = b.totalTest$Survived)
+
+svmOutlier <- train(Survived ~ Pclass + Sex + Age.step + Age.step*OutlierAge + SibSp + Parch + N.Familia + Fare + Embarked + Titulo, 
+             data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "cv"), tuneLength = 10) 
+b.totalTest[, SurvivedSVMOut := predict(svmOutlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$svmOut <- postResample(pred = b.totalTest$SurvivedSVMOut, obs = b.totalTest$Survived)
+
+#Melhor resultado no Kaggle
+svm2 <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge + N.Familia + Fare + Embarked + Titulo, 
+              data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3), tuneLength = 15)
+b.totalTest[, SurvivedSVM2 := predict(svm2, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm2 <- postResample(pred = b.totalTest$SurvivedSVM2, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVM2)
+
+svmLinear <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge + N.Familia + Fare + Embarked + Titulo, 
+              data = b.totalTrain, method = "svmLinear", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3), tuneLength = 15)
+b.totalTest[, SurvivedSVMLin := predict(svmLinear, newdata = b.totalTest, type = "raw")]
+modelsSummary$svmLinear <- postResample(pred = b.totalTest$SurvivedSVMLin, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVMLin)
+
+b.totalTest[b.totalTest$Survived == 1 & b.totalTest$SurvivedSVM2 == 0, c("Survived", "SurvivedSVM2", "Pclass", "Sex", "Age.step", "OutlierAge", "N.Familia", "Fare", "Embarked", "Titulo")]
+b.totalTest[b.totalTest$Survived == 0 & b.totalTest$SurvivedSVM2 == 1, c("Survived", "SurvivedSVM2", "Pclass", "Sex", "Age.step", "OutlierAge", "N.Familia", "Fare", "Embarked", "Titulo")]
+
+svm2outlier <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge*Age.step + N.Familia + Fare + Embarked + Titulo, 
+              data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "cv"), tuneLength = 10)
+b.totalTest[, SurvivedSVM2out := predict(svm2outlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm2Outlier <- postResample(pred = b.totalTest$SurvivedSVM2out, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVM2out)
+
+logitBoost <- train(Survived ~ Pclass + Sex + Age.step + OutlierAge + N.Familia + Fare + Embarked + Titulo, data = b.totalTrain, method = "LogitBoost", nIter = 200, trControl = trainControl(method = "cv"))
+b.totalTest[, Survivedboost := predict(logitBoost, newdata = b.totalTest, type = "raw")]
+modelsSummary$logiBoost <- postResample(pred = b.totalTest$Survivedboost, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$Survivedboost, reference = b.totalTest$Survived)
+
+modelsSummaryDT <- as.data.table(do.call(rbind, modelsSummary), keep.rownames = TRUE)
+modelsSummaryDT[order(-modelsSummaryDT$Accuracy)]
+
+
+b.total[b.total$Origem == "teste", SurvivedLogitOut := predict(logitOutlier, newdata = b.total[b.total$Origem == "teste"], type = "raw")]
+b.total[b.total$Origem == "teste", SurvivedLogit := predict(logit, newdata = b.total[b.total$Origem == "teste"], type = "raw")]
+b.total[b.total$Origem == "teste", SurvivedSVM2Out := predict(svm2outlier, newdata = b.total[b.total$Origem == "teste"], type = "raw")]
+b.total[b.total$Origem == "teste", SurvivedSVMLinear := predict(svmLinear, newdata = b.total[b.total$Origem == "teste"], type = "raw")]
+
+write.csv(b.total[b.total$Origem == "teste", c("PassengerId", "SurvivedLogitOut")], "previsao-logitOutlier.csv", row.names = FALSE)
+write.csv(b.total[b.total$Origem == "teste", c("PassengerId", "SurvivedLogit")], "previsao-logit.csv", row.names = FALSE)
+write.csv(b.total[b.total$Origem == "teste", c("PassengerId", "SurvivedSVM2Out")], "previsao-SVM2Outlier.csv", row.names = FALSE)
+write.csv(b.total[b.total$Origem == "teste", c("PassengerId", "SurvivedSVMLinear")], "previsao-SurvivedSVMLinear.csv", row.names = FALSE)
+```
+
+

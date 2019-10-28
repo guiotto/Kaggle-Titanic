@@ -1,0 +1,356 @@
+---
+title: "Kaggle's Titanic Competition"
+output:
+  html_document:
+    df_print: paged
+---
+# Loading the libraries
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(data.table)
+library(magrittr)
+library(caret)
+library(dplyr)
+library(stringr)
+library(knitr)
+library(broom)
+library(caret)
+```
+# About
+I've joined this competition as my first one. My goal was to get to know a little bit more about machine learning and its difference from Econometrics. At this point, I have taken the Andrew Ng Coursera's course and I have realized that the these two areas of knowledge have a lot in common. The most surprising was that I've alread had contact with more than 80% of the course's content while working with Econometrics and Multivariate Analysis.
+
+This Rnotebook has been produced few months ago. My rank today, 2019/10/26, is top 13%. I beleieve it's not bad for a first contact to Machine Learning. The main point, for me, it is that I have learned a lot doing this competition!
+
+# Loading the training and test datasets
+The training dataset has 891 observations and 13 variables and the test dataset has 418 observations and 12 variables - the difference is due to the `Survived` variable in the former.
+These dataset were appended into a the new dataset `fullDT0` in order to facilitate the variable transformations such as transforming char type variable to a factor one. Hence, this dataset has 1309 observation and 13 variables.
+```{r echo=TRUE}
+b.test0 <- data.table(read.csv(paste(getwd(),"/datasets/", "test.csv", sep = ""), na.strings = c("")))[, Origin := "test"]
+b.train0 <- data.table(read.csv(paste(getwd(),"/datasets/", "train.csv", sep = ""), na.strings = c("")))[, Origin := "train"]
+fullDT0 <- rbind(b.test0, b.train0, fill = TRUE, use.names = TRUE)
+lapply(list(b.train0, b.test0, fullDT0), dim)
+```
+
+# Checking the variables type and choosing the a new one properly.
+
+In this section, the variables type is changed for better usage in the modelling.
+```{r}
+str(fullDT0)
+```
+
+The variables `PassengerId`, `PClass`, `Name` and `Ticket` are st as integer, factor and factor, respectively. `PassengerId` is turned into character variable, `PClass` is changed to *factor* because it has an ordinal meaning (with 3rd class the lowest), while `Name` and `Ticket` are transformed from *factor* to *character* they are similar to a passenger identification. It could exist more than one passenger with the same name and the same ticket identification, however the number of factor levels they have suggests the variables themself would not be a source of significant information for the model. `Survived` is also modified to *factor* because is a binary situation: it equals 1 if the person has survived, otherwise it equals 0.
+
+```{r}
+fullDT0$PassengerId %<>% as.character()
+fullDT0$Pclass %<>% factor(levels = c(3, 2, 1))
+fullDT0$Name %<>% as.character()
+fullDT0$Ticket %<>% as.character()
+fullDT0$Survived %<>% factor()
+```
+
+
+## Feature engineering - creating new variables that may be useful while modelling
+### Family size
+It seems reasonable to me that bigger families are more dificult to save than those with fewer members.
+```{r}
+fullDT0[, Family.S := SibSp + Parch + 1]
+summary(fullDT0$Family.S)
+```
+
+### Titles
+*I've read about this feature doing some googling.*
+The idea here is that Title could be a proxy for social status and wealth. It is well known that social status may make a big difference in social interactions. In other words, the better the status, the higher the preference in the saving queue. 
+
+```{r include=FALSE}
+titles <- unique(str_extract(fullDT0$Name, "[A-Za-z]+\\."))
+fullDT0[, Title := str_extract(Name, "[A-Za-z]+\\.")]
+table(fullDT0$Title)
+fullDT0[which(fullDT0$Title %in% names(which(table(fullDT0$Title) <61))), Title := "Raro"]
+fullDT0$Title <- as.factor(fullDT0$Title)
+```
+# EXPLORATORY DATA ANALYSIS
+The goal of this topic is getting familiar with the dataset in order to identify some issue that has to be dealt with and also discover some interesting pattern among the variables, or even some discrepant fact.
+
+It is displayed in the summary that the variables `Age`, `Fare`, `Cabin` and `Embarked` have missing values. Missing values are a sort of concern because only complete observations are taken into account when running any sort of regression. One way of dealing with *NAs* is dropping observation that has it. As a result, the number of available observations could drop in a considerable amount. The problem of doing this is that it could bring bias to the parameters because the sample may no longer represent the population. Another possibility is imputation.  There are several methods of doing so: mean/median imputation and regression imputation, among others. 
+
+Almost 80% of the observations of `Cabin` are missing values. Doing any imputation in this high amount of observation could bring a lot of uncertainty to the model. Hence, it will not be used for the predicting task.
+```{r echo=TRUE}
+summary(fullDT0)  
+fullDT0 <- fullDT0[, Cabin := NULL]
+```
+
+## Variable `Survived`
+Major part of the the passengers did not survived. What it is important here is the fact that this variable could be considered as balanced, there is no concentration of observations in one single class.
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = Survived, fill = Survived)) + geom_bar(stat = "count") + 
+  geom_label(stat = "count", aes(label = ..count..))
+```
+
+## Variable `Pclass`
+It is seems that there is a relation between the `Pclass` and `Survived`. Despite beeing in the 2nd class may appear that it does not matter much whether the passenger is going to survive, being in the 1st or 3rd class matter a lot!
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = Pclass, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + 
+  geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+```
+
+## Variable `Sex`
+It is showed in the graph that being a female migth contribute strongly to the chances of beeing alive after the disaster. 74% of the females survived, meanwhile about 80% of the men died.
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = Sex, fill = Survived), na.rm = TRUE) + 
+  geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+```
+
+### Variable `SibSp`
+Vast majority of the observation are concentrated in `SibSp = 0` or `SibSp = 2`. The main point here, I believe, is that the number of person with `SibSp = 0` who died is almost twice of those with `SibSp = 1`. This is something to remember when choosing the variables for the model.
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = SibSp, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+```
+```{r}
+  cbind(round(prop.table(rbind(table(fullDT0$SibSp, fullDT0$Survived), colSums(table(fullDT0$SibSp, fullDT0$Survived))), margin = 1)*100, 1),
+        rowSums(round(prop.table(rbind(table(fullDT0$SibSp, fullDT0$Survived), colSums(table(fullDT0$SibSp, fullDT0$Survived))), margin = 1)*100, 1))) %>% `colnames<-`(c("Not Survived", "Survived", "Total")) %>% `rownames<-`(c(0:5, 8, "Total"))
+```
+
+## Variable `Parch`
+The same observation about `SibSp` can be made for `Parch`. This could be a problem in the regression because they present the same pattern. Making a combination of both could be something to consider when feature engeneering.
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = Parch, fill = Survived), na.rm = TRUE) + geom_bar(stat = "count") + geom_label(stat = "count", aes(label = stat(count)), position = position_stack(vjust = 0.5))
+```
+```{r}
+cbind(round(prop.table(rbind(table(fullDT0$Parch, fullDT0$Survived), colSums(table(fullDT0$Parch, fullDT0$Survived))), margin = 1)*100, 1),
+      rowSums(round(prop.table(rbind(table(fullDT0$Parch, fullDT0$Survived), colSums(table(fullDT0$Parch, fullDT0$Survived))), margin = 1)*100, 1))) %>%
+  `colnames<-`(c("Not Survived", "Survived", "Total")) %>% `rownames<-`(c(0:6, 9, "Total"))
+```
+
+## Variable `Fare`
+### Missing value on `Fare`
+As shown in the summary, `Fare` presents a single missing value. This matter is taken care of before doing the analysis.
+```{r warning=FALSE, results='asis'}
+fullDT0[which(is.na(fullDT0$Fare)),] %>% kable()
+```
+
+The next step consist in searching for some pattern that would make its value imputation possible. First, it has been looked up people with the same family name, which is inexistant. Then, it has been search for someone who has the same `Ticket`, meaning she could be a relative or friend who was travelling together - no match. Finally, from the idea that people with the same departure (`Embarked = S`), the same class (`Pclass = 3` and the same *ticket*'s number pattern - with 4 digits - migth have similar attributes (`Fare`) of Mr. Tomas'.
+
+```{r include=TRUE, results='asis'}
+fullDT0[which(grepl("^Storey", fullDT0$Name)), ] %>% kable()
+```
+
+```{r}
+fullDT0[which(grepl("3701", fullDT0$Ticket)), ] %>% kable()
+```
+
+
+```{r}
+fullDT0[which(nchar(fullDT0$Ticket) == 4 &  fullDT0$Embarked == "S" & fullDT0$Pclass == 3), ][order(Ticket)][1:5, ] %>% kable()
+```
+
+It seems that high fare *tickets* are those which have repeated occurencies. Therefore, because Mr. Thomas' ticket number is unique, the missing value under analysis is imputated by the mean of the subset of unique ticketnumbers that follow the conditions discribed (`mean` = *10.85302* ).
+
+```{r echo=TRUE}
+fullDT0[which(is.na(fullDT0$Fare)), "Fare"] <- fullDT0[which(nchar(fullDT0$Ticket) == 4 &  fullDT0$Embarked == "S" & fullDT0$Pclass == 3), ][ !duplicated(Ticket), mean(Fare, na.rm = TRUE)]
+```
+
+### Plotting `Fare`
+Looking at the histogram that the `Fare`s values, one could see that fare values are concentrated up to 100 and values bigger than 250 might be considered as high leverage
+```{r}
+ggplot(data = fullDT0[fullDT0$Origin == "train", ], aes(x = Fare)) + geom_histogram(binwidth = 30)
+```
+
+## Variable `Embarked`
+### Missing values on `Embarked`
+While listing the missing variables, it can be seen that there are only two.
+```{r include=TRUE}
+fullDT0[which(is.na(fullDT0$Embarked)),] %>% kable()
+```
+
+On the same line of thought of the previous analysis, it is noticeable that there is no other passenger with the same surname of these two observations in analysis. Then they are compared with passengers that also belong to first class (`Pclass == 1`) and have the *ticket* starting with *113*. It is noteworthy on the Box-plot chart that the ticket fare that are equal to 80 (`Fare == 80`), red line in the chart, might be an outlier `Embarked == S`. Therefore, those two missing values are set as *C*
+.
+```{r include=TRUE}
+fullDT0[which(grepl("^Icard", fullDT0$Name)), ] %>% kable()
+fullDT0[which(grepl("^Stone", fullDT0$Name)), ]%>% kable()
+fullDT0[which(grepl("^113", fullDT0$Ticket)), ][order(Ticket)][1:5, ] %>% kable()
+ggplot(fullDT0[which(grepl("^113", fullDT0$Ticket) & fullDT0$Pclass == 1 & !is.na(fullDT0$Embarked)) , ], aes(x = Embarked, y = Fare))  + geom_boxplot() + geom_hline(yintercept = 80, color = "Red")
+fullDT0[which(is.na(fullDT0$Embarked)), "Embarked"] <- "C"
+```
+
+### Vriable `Age`
+There are 263 missing values for the variable `Age`. As we can see in the Box Plot chart, the variable presents different patterns among the `Pclass` 
+```{r}
+summary(fullDT0$Age)
+```
+
+The variable distribution is a bit left skeewed and there is an awkward behaviour for ages below 10. The read line shows the mean, wihle the blue ones correspond to two times the standard deviation, indicating presence of possible outliers.
+
+```{r warning=FALSE}
+ggplot(fullDT0, aes(x = Age)) + geom_density() + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE)), color = "red", linetype = "dashed") + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE) + 2*sd(Age, na.rm = TRUE)), color = "blue") + geom_vline(aes(xintercept = mean(Age, na.rm = TRUE) - 2*sd(Age, na.rm = TRUE)), color = "blue")
+```
+
+It is noticeable, in the Box-Plot chart, that there are different patterns of age distribution among `Pclass`. The same can be said when analysing `Age` among `Title`. 
+```{r warning=FALSE}
+ggplot(fullDT0, aes(x = Pclass, y = Age), na.rm = TRUE) + geom_boxplot()
+```
+
+```{r warning=FALSE}
+ggplot(data = fullDT0, mapping = aes(x = Age, y = Title, shape = Title, color = Title)) + geom_point()
+```
+
+#### Identifying `Age` ouliers
+One possible way of dealing with outliers in the dataset is, instead of deleting, to flag them with a dummy in the model.
+```{r}
+outliergeral <-  boxplot.stats(fullDT0$Age)$out
+outlierP1 <- boxplot.stats(fullDT0$Age[fullDT0$Pclass == 1])$out
+outlierP2 <- boxplot.stats(fullDT0$Age[fullDT0$Pclass == 2])$out
+outlierP3 <- boxplot.stats(fullDT0$Age[fullDT0$Pclass == 3])$out
+fullDT0[, OutlierAge := ifelse(Age %in% outliergeral, 1, 0)]
+```
+
+#### Prediction of `Age` missing values
+Instead of deleting observations that present missing value, one powerfull alternative is using a statistical model to predict the missing value with respect of the remaning characteristics present in the dataset.
+
+Creating the training and test sets
+```{r}
+set.seed(42)
+ageFull <- fullDT0[!is.na(fullDT0$Age), -"Survived"]
+age.trainIndex <- createDataPartition(ageFull$Age, p = .75, list = FALSE, times = 1)
+ageTrain <-ageFull[age.trainIndex]
+ageTest <- ageFull[-age.trainIndex]
+```
+
+Estimating the missing values with Ordinary Least Squares, Linear Stepwise Regression and 
+```{r echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+set.seed(3500)
+# OLS with intercept
+ols.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Title + OutlierAge, data = ageTrain, 
+                 trControl = trainControl(method = "cv"), verboseIter = TRUE, method = "lm", tuneGrid = expand.grid(intercept = TRUE))
+ageTest[, pAge.ols := predict(ols.Age, newdata = ageTest, type = "raw")]
+accuracy.Age <- list("ols" = postResample(pred = ageTest$pAge.ols, obs = ageTest$Age))
+
+# OLS with no intercept
+ols0.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Title + OutlierAge, data = ageTrain, 
+                 trControl = trainControl(method = "cv"), verboseIter = TRUE, method = "lm", tuneGrid = expand.grid(intercept = FALSE))
+ageTest[, pAge.ols0 := predict(ols0.Age, newdata = ageTest, type = "raw")]
+accuracy.Age$ols.nIntercp <- postResample(pred = ageTest$pAge.ols0, obs = ageTest$Age)
+
+#Linear Stepwise Regression
+step.Age <- train(Age ~ Pclass + Sex + SibSp + Parch + Fare + Embarked + Title + OutlierAge, data = ageTrain, method = "glmStepAIC",
+                  trControl = trainControl(method = "cv"))
+ageTest[, pAge.step := predict(step.Age, newdata = ageTest, type = "raw")]
+accuracy.Age$stepwise <- postResample(pred = ageTest$pAge.step, obs = ageTest$Age)
+
+accuracy.Age
+```
+
+I diced to use the results of the Stepwise Regression by its lower errors.
+```{r}
+fullDT0[, Age.step := ifelse(is.na(fullDT0$Age), predict(step.Age, newdata = fullDT0, type = "raw"), Age)]
+```
+
+# Modelling and estimating the Survived variable
+Separating the training and test dataset, with respect to original observations from Kaggle.
+```{r}
+set.seed(875614)
+b.train.1 <- fullDT0[fullDT0$Origin == "train"]
+b.totalTrainIndex <- createDataPartition(b.train.1$Survived, p = 0.75, list = FALSE, times = 1)
+b.totalTrain <- b.train.1[b.totalTrainIndex]
+b.totalTest <- b.train.1[-b.totalTrainIndex]
+```
+
+The following methods were used for estimating the `Survived` variable: Logistic Regression, Logistic Regression with Stepwise, Logistic Regression with Boosting and Support Vector Machine, 
+```{r message=FALSE, warning=FALSE, results='hide'}
+#Logistic regression
+logit <- train(Survived ~ Pclass + Sex + Age.step + SibSp + Parch + Family.S + Fare + Embarked + Title, 
+               data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, Survived1 := predict(logit, newdata = b.totalTest, type = "raw")]
+modelsSummary <- list(logit = postResample(pred = b.totalTest$Survived1, obs = b.totalTest$Survived))
+confusionMatrix(data = b.totalTest$Survived1, reference = b.totalTest$Survived)
+varImp(logit)
+
+# Logistic Regression, identifying outlier observations for Age
+logitOutlier <- train(Survived ~ Pclass + Sex + Age.step + Age.step*OutlierAge + SibSp + Parch + Family.S + Fare + Embarked + Title, 
+                      data = b.totalTrain, method = "glm", family = binomial(link = "logit"), trControl = trainControl(method = "cv"))
+b.totalTest[, Survived2 := predict(logitOutlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$logitOutlier <- postResample(pred = b.totalTest$Survived2, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$Survived2, reference = b.totalTest$Survived)
+varImp(logitOutlier)
+
+# Logistic Regression with Stepwise - here, I added the Age^2 because the death rate in the upper bound and lower bound was higher.
+logitstep <- step(glm(Survived ~ 1, data = b.totalTrain, family = "binomial"), 
+                  scope = list(
+                    lower = glm(Survived ~ 1, data = b.totalTrain, family = "binomial"), 
+                    upper = glm(Survived ~ Pclass + Sex + Age.step + I(Age.step^2) + Age.step*OutlierAge + SibSp + Parch + Family.S + 
+                                  Fare + Embarked + Title + Pclass*Sex + Pclass*Sex*Age.step + Sex*Age.step + Sex*Family.S + 
+                                  Age*Family.S + Sex*Age*Family.S, data = b.totalTrain, family = "binomial")), direction = "forward")
+b.totalTest[, SruvivedStep := ifelse(predict(logitstep, newdata = b.totalTest, type = "response") > 0.5, 1, 0)]
+modelsSummary$logitStep <- postResample(pred = b.totalTest$SruvivedStep, obs = b.totalTest$Survived)
+
+# Support Vector Machine
+svm <- train(Survived ~ Pclass + Sex + Age.step + SibSp + Parch + Family.S + Fare + Embarked + Title, data = b.totalTrain, method = "svmRadial", 
+             trControl = trainControl(method = "cv"), tuneLength = 10) 
+b.totalTest[, SurvivedSVM := predict(svm, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm <- postResample(pred = b.totalTest$SurvivedSVM, obs = b.totalTest$Survived)
+
+#SVM with the outlier Age flagged 
+svmOutlier <- train(Survived ~ Pclass + Sex + Age.step + Age.step*OutlierAge + SibSp + Parch + Family.S + Fare + Embarked + Title, 
+             data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "cv"), tuneLength = 10) 
+b.totalTest[, SurvivedSVMOut := predict(svmOutlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$svmOut <- postResample(pred = b.totalTest$SurvivedSVMOut, obs = b.totalTest$Survived)
+
+# SVM with some variable interactions that I believe make sens, by data exploration - best result in Kaggle
+svm2 <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge + Family.S + Fare + Embarked + Title, 
+              data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3), tuneLength = 15)
+b.totalTest[, SurvivedSVM2 := predict(svm2, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm2 <- postResample(pred = b.totalTest$SurvivedSVM2, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVM2)
+
+# SVM with some variable interactions that I believe make sens, by data exploration, and Age outliers flagged
+svm2outlier <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge*Age.step + Family.S + Fare + Embarked + Title, 
+              data = b.totalTrain, method = "svmRadial", trControl = trainControl(method = "cv"), tuneLength = 10)
+b.totalTest[, SurvivedSVM2out := predict(svm2outlier, newdata = b.totalTest, type = "raw")]
+modelsSummary$svm2Outlier <- postResample(pred = b.totalTest$SurvivedSVM2out, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVM2out)
+
+# SVM with Linear Kernel - just in case...
+svmLinear <- train(Survived ~ Pclass*Sex + Sex + Age.step + Sex*Age.step + OutlierAge + Family.S + Fare + Embarked + Title, 
+              data = b.totalTrain, method = "svmLinear", trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3), tuneLength = 15)
+b.totalTest[, SurvivedSVMLin := predict(svmLinear, newdata = b.totalTest, type = "raw")]
+modelsSummary$svmLinear <- postResample(pred = b.totalTest$SurvivedSVMLin, obs = b.totalTest$Survived)
+confusionMatrix(b.totalTest$Survived, b.totalTest$SurvivedSVMLin)
+
+# Boosting method for Logistic Regression - I just wanted to see how it works
+logitBoost <- train(Survived ~ Pclass + Sex + Age.step + OutlierAge + Family.S + Fare + Embarked + Title, data = b.totalTrain, method = "LogitBoost", nIter = 200, trControl = trainControl(method = "cv"))
+b.totalTest[, Survivedboost := predict(logitBoost, newdata = b.totalTest, type = "raw")]
+modelsSummary$logiBoost <- postResample(pred = b.totalTest$Survivedboost, obs = b.totalTest$Survived)
+confusionMatrix(data = b.totalTest$Survivedboost, reference = b.totalTest$Survived)
+```
+
+Assessing the accuracy of the models. Is was quite surprising for me that the model SV2 has gotten the highest score in the competition, eventhough it is one of the worst accuracy
+```{r}
+modelsSummaryDT <- as.data.table(do.call(rbind, modelsSummary), keep.rownames = TRUE)
+modelsSummaryDT[order(-modelsSummaryDT$Accuracy)] %>% kable()
+```
+
+```{r warning=FALSE, include=FALSE}
+fullDT0[fullDT0$Origin == "test", SurvivedLogit := predict(logit, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SurvivedLogitOut := predict(logitOutlier, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SurvivedSVM2Out := predict(svm2outlier, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SruvivedStep := ifelse(predict(logitstep, newdata = fullDT0[fullDT0$Origin == "test"], type = "response") > 0.5, "1", "0")]
+fullDT0[fullDT0$Origin == "test", SurvivedSVMLinear := predict(svmLinear, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SurvivedSVM := predict(svm, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SurvivedSVMOut := predict(svmOutlier, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", SurvivedSVM2 := predict(svm2, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+fullDT0[fullDT0$Origin == "test", Survivedboost := predict(logitBoost, newdata = fullDT0[fullDT0$Origin == "test"], type = "raw")]
+
+```
+
+```{r include=FALSE}
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedLogit")], "previsao-logit.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedLogitOut")], "previsao-logitOutlier.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedSVM2Out")], "previsao-SVM2Outlier.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SruvivedStep")], "previsao-logitstep.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedSVMLinear")], "previsao-SurvivedSVMLinear.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedSVM")], "previsao-SurvivedSVM.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedSVMOut")], "previsao-SVMOutlier.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "SurvivedSVM2")], "previsao-SurvivedSVM2.csv", row.names = FALSE)
+write.csv(fullDT0[fullDT0$Origin == "test", c("PassengerId", "Survivedboost")], "previsao-SurvivedLogitBoost.csv", row.names = FALSE)
+```
+
